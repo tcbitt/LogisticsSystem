@@ -5,7 +5,7 @@ class Node:
         self.next = None
 
 class HashTable:
-    def __init__(self, capacity=40):
+    def __init__(self, capacity=1):
         self.capacity = capacity
         self.size = 0
         self.table = [None] * self.capacity

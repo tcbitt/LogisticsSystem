@@ -9,6 +9,7 @@ class Package:
         self.weight_kg = weight_kg
         self.notes = notes
         self.status = status
+        self.delivery_time = None
 
     def print_info(self):
         print(f"Package ID: {self.ID}\n"

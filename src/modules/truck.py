@@ -5,6 +5,7 @@ class Truck:
         self.truck_id = truck_id
         self.packages = []
         self.mileage = 0
+        self.departure_time = datetime.strptime("8:00 AM", "%I:%M %p")
         self.delivery_route = []
 
 

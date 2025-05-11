@@ -1,10 +1,12 @@
-import pandas as pd
-import networkx as nx
+import csv
 import re
-from matplotlib import pyplot as plt
+from datetime import timedelta
+from datetime import datetime
 from modules import Package
 from modules import HashTable
 from modules import Truck
+from modules import Graph
+
 
 def main():
     truck1 = Truck(1)
@@ -13,165 +15,235 @@ def main():
 
     trucks = [truck1, truck2, truck3]
 
-    # Get the packages from the package file.
-    package_file_path = "./resources/WGUPS Package File.xlsx"
-    pf = pd.read_excel(package_file_path, sheet_name='Sheet1', header=7,
-                       dtype={'Package ID': int,
-                              'Address': str,
-                              'City': str,
-                              'State': str,
-                              'Zip': str,
-                              'Delivery Deadline': str,
-                              'Weight KILO': int,
-                              'Special Notes': str
-                              },
-                       keep_default_na=False
-                       )
+    truck1_departure_time = datetime.strptime("8:00 AM", "%I:%M %p").time()
+    truck2_departure_time = datetime.strptime("9:05 AM", "%I:%M %p").time()
+    truck3_departure_time = datetime.strptime("10:30 AM", "%I:%M %p").time()
 
-    # Get the distances from the distance table.
-    distance_file_path = "./resources/WGUPS Distance Table.xlsx"
-    df = pd.read_excel(distance_file_path, sheet_name="Sheet1", header=None)
+    distance_file_path = "./resources/distances.csv"
+    package_file_path = "./resources/packages.csv"
 
     # Graph instantiation.
-    g = nx.Graph()
-
-    # Populate graph g with the distance information and a visited attribute.
-    get_distances(df, g)
-    visited_dict = {node: False for node in g.nodes()}
-    nx.set_node_attributes(g, visited_dict, "visited")
+    g = Graph()
+    load_graph_from_csv(g, distance_file_path)
+    #g.display()
 
     # Instantiate the hashtable using the package_file.
-    packages = HashTable()
+    package_table = HashTable()
+    reference_table = HashTable()
 
     # Populate the hash table using the get_packages method.
-    get_packages(pf, packages)
+    get_packages(package_table, package_file_path)
+    get_packages(reference_table, package_file_path)
 
-    print("Edges in Graph:")
-    for edge in g.edges(data=True, ):
-        node1, node2, data = edge
-        visited = g.nodes[node2]["visited"]
-        print(f"{edge}, visited: ({visited})")
-
-    ''''# Print the hashtable to ensure its populating correctly.
-    for bucket in packages.table:
-        current = bucket
-        while current:
-            print(f"KEY:{current.key}\nPACKAGE: {current.value}")
-            current = current.next'''
 
     visited_hubs = set()
+    packages_delivered_together = []
+    delayed_packages = []
+
+    # Get the truck 2 packages
+    for package in package_table.table:
+        if package and package.value.notes == "Can only be on truck 2":
+            truck2.add_package(package.value)
+            package_table.remove(package.key)
+
+    # Get the packages that need to be delivered together
+    for package in package_table.table:
+        if package and package.value.notes.startswith("Must be delivered"):
+            packages_delivered_together.append(package.value.ID)
+            package_id_regex = re.findall(r'\d+', package.value.notes)
+            for package_id in package_id_regex:
+                package_id = int(package_id)  # Convert to integer
+                if package_id not in packages_delivered_together:  # Avoid duplicates
+                    packages_delivered_together.append(package_id)
+
+    for package in packages_delivered_together:
+        truck1.add_package(package_table.search(package))
+        package_table.remove(package)
+
+    for package in delayed_packages:
+        truck3.add_package(package_table.search(package))
+        package_table.remove(package)
+
+    # Get the packages that are delayed until 9:05 AM
+    for package in package_table.table:
+        if package and package.value.notes.startswith("Delayed on flight"):
+            delayed_packages.append(package.value.ID)
 
     for ea_truck in trucks:
-        ea_truck.delivery_route = nearest_neighbor(g, ea_truck, packages, "Western Governors University\n4001 South 700 East, \nSalt Lake City, UT 84107", visited_hubs)
-        print(f"Truck {ea_truck.truck_id} route: {ea_truck.delivery_route}")
+        ea_truck.delivery_route = nearest_neighbor(g, ea_truck, package_table ,visited_hubs, packages_delivered_together, delayed_packages)
+
+    # Load remaining packages onto the last truck
+    for package in package_table.table:
+        for ea_truck in trucks:
+            if len(ea_truck.packages) < 16:
+                if package:
+                    truck3.add_package(package.value)
+                    package_table.remove(package)
+
+    for ea_truck in trucks:
+        first_priority_list = []
+        second_priority_list = []
+        # Always load from the hub
+        current_hub = 0
+        for package in ea_truck.packages:
+            if package:
+                if package.deadline == "9:00 AM":
+                    first_priority_list.append(g.get_node_index(package.address))
+                elif package.deadline == "10:30 AM":
+                    second_priority_list.append(g.get_node_index(package.address))
+
+        edge_list = []
+        seen = set()
+        path_list = [x for x in (first_priority_list + second_priority_list) if not (x in seen or seen.add(x))]
+        route = [0]
+        for i in path_list:
+            route.append(i)
+
+        for i in ea_truck.delivery_route:
+            if i in path_list:
+                continue
+            else:
+                path_list.append(i)
+
+        if 0 in path_list:
+            path_list.remove(0)
+            path_list.insert(0, 0)
+
+        ea_truck.delivery_route = path_list
+
+    for ea_truck in trucks:
+        print("\n\n")
+        current_time = ea_truck.departure_time
+        # Set the package status to en route
+        for package in ea_truck.packages:
+            package.status = "En route"
+        for i in range(len(ea_truck.delivery_route) - 1):
+            hub = ea_truck.delivery_route[i]
+            next_hub_idx = ea_truck.delivery_route[i + 1]
+            edges = g.graph[hub]
+            for edge in edges:
+                if edge[0] == next_hub_idx:
+                    time_taken = (edge[1] / 18) * 60
+                    current_time += timedelta(minutes=time_taken)
+                    for package in ea_truck.packages:
+                        idx = g.get_node_index(package.address)
+                        if g.get_node_index(package.address) == next_hub_idx:
+                            package.status = "Delivered"
+                            package.delivery_time = current_time.strftime("%I:%M %p")
+                            print(
+                                f"Truck {ea_truck.truck_id} delivered package {package.ID} at {current_time.strftime('%I:%M %p')}")
+                            break
+                        else:
+                            continue
+                    break
+                else:
+                    continue
+
+    print(f"Total mileage: {sum(obj.mileage for obj in trucks)} miles")
 
 
-    print("BREAK POINT!")
 
+    print("STOP")
 
-# Method to plot the graph for visual inspection, so I can ensure the graph looks correct and has the correct number of edges.
-def plot_graph(graph):
-    plt.figure(figsize=(50, 50))
-    nx.draw(graph, with_labels=True)
-    plt.show()
+# Get the packages from the package file.
+def get_packages(packages_hash_table, package_file):
+    with open(package_file, 'r') as file:
+        # Skip the header row
+        package_data = csv.reader(file)
+        next(package_data)  # Skip header row
 
-# Method to read the package
-def get_packages(package_file, packages):
-    # Read through the package file and create a list of Packages to be added to the hashtable, also get the size iterating through the rows for the hashtable.
-    for _, row in package_file.iterrows():
-        package_id = row['Package ID']  # Replace with actual column name if needed
-        package = Package(
-            package_id,
-            row['Address'],
-            row['City'],
-            row['State'],
-            row['Zip'],
-            row['Delivery Deadline'],
-            row['Weight KILO'],
-            row['Special Notes'],
-            "At the hub"
-        )
-        packages.insert(package_id, package)
+        for row in package_data:
+            pkg_id = int(row[0])
+            address = row[1]
+            city = row[2]
+            state = row[3]
+            zip_code = row[4]
+            deadline = row[5]
+            weight_kg = int(row[6])
+            notes = row[7]
 
+            # Create package object with initial status "at hub"
+            package = Package(pkg_id, address, city, state, zip_code,
+                              deadline, weight_kg, notes, "At Hub")
 
-def get_distances(distance_file, graph):
-    # Extract hub names & addresses (Rows 8-34, Columns 0 & 1).
-    hub_names = distance_file.iloc[8:35, 0].dropna().tolist()
-    hub_addresses = distance_file.iloc[8:35, 1].dropna().tolist()
+            # Insert package into hash table
+            packages_hash_table.insert(pkg_id, package)
 
-    # Create a dictionary mapping hubs to addresses.
-    hub_info = {hub_names[i]: hub_addresses[i] for i in range(len(hub_names))}
+def nearest_neighbor(graph, truck, packages, visited, packages_delivered_together, delayed_packages):
+    # Start at HUB
+    current_hub_index = 0
+    visited.add(current_hub_index)
+    truck.delivery_route.append(current_hub_index)
 
-    # Add hubs as nodes with their addresses
-    for hub, address in hub_info.items():
-        graph.add_node(hub, address=address)
-
-    # Add weighted edges based on the lower half of the matrix.
-    for i in range(8, 35):  # Rows 8-34 contain distances
-        source_hub = distance_file.iloc[i, 0]  # Column 0 is the hub names.
-        for j in range(i - 7):  # Extract only lower triangle values.
-            target_hub = hub_names[j]
-            distance = distance_file.iloc[i, j + 2]
-
-            if pd.notna(distance):
-                graph.add_edge(source_hub, target_hub, weight=float(distance))
-                graph.add_edge(target_hub, source_hub, weight=float(distance))  # Mirror for full adjacency.
-
-
-def nearest_neighbor(graph, truck, packages, start_hub, visited):
-    current_hub = start_hub
-
-    while len(truck.packages) < 16:
-        visited.add(current_hub)
-        print("Truck Number:", truck.truck_id)
-        truck.delivery_route.append(current_hub)
-
-        # Find the nearest unvisited hub
+    while len(visited) < len(graph.graph) and len(truck.packages) < 16:
+        # Find the closest unvisited neighbor from current hub
+        smallest_edge = float('inf')
         next_hub = None
-        min_distance = float('inf')
-        pattern = re.compile('^[^\n]+\n([^\n,]+)')
+
+        for neighbor, distance in graph.graph[current_hub_index]:
+            if neighbor not in visited and distance < smallest_edge:
+                smallest_edge = distance
+                next_hub = neighbor
+
+        # If no unvisited neighbor found
+        if next_hub is None:
+            break
+
+        # Move to the next hub
+        current_hub_index = next_hub
+        truck.mileage += graph.graph[current_hub_index][0][1]
+        visited.add(current_hub_index)
+        truck.delivery_route.append(current_hub_index)
+
+        # Check if any packages need to be delivered to this hub
+        hub_address = graph.node_addresses[current_hub_index][1].split('\n')[0].strip()
 
         for bucket in packages.table:
-            if current_hub == 'Western Governors University\n4001 South 700 East, \nSalt Lake City, UT 84107':
-                break
             current = bucket
-            while current:
-                match = pattern.match(current_hub).group(1).strip()
-                if current.value.address == match:
-                    truck.add_package(current.value)
-                    packages.remove(current.key)
-
-                current = current.next
-
-        for neighbor in graph.neighbors(current_hub):
-            if neighbor not in visited:
-                distance = graph[current_hub][neighbor]['weight']
-                if distance < min_distance:
-                    min_distance = distance
-                    next_hub = neighbor
-
-        if next_hub:
-            current_hub = next_hub
-            truck.mileage += min_distance
-            visited.add(next_hub)
-
-            # Load packages onto the truck
-            for bucket in packages.table:
-                current = bucket
-                while current:
-                    if current.value.address == graph.nodes[next_hub]['address']:
-                        truck.add_package(current.value)
-                    current = current.next
-        else:
-            break  # No more unvisited hubs
-
-
+            if current:
+                # Compare package address with current hub address
+                if current.value.address == hub_address and len(truck.packages) < 16:
+                    if current:
+                        if current.value.deadline != "EOD" and truck.truck_id == 3:
+                            break
+                        else:
+                            truck.add_package(current.value)
+                            packages.remove(current.key)
+                            print(f"Added package #{current.value.ID} to truck {truck.truck_id}")
 
     return truck.delivery_route
 
 
+def load_graph_from_csv(graph, csv_filename):
+    with open(csv_filename, newline='') as file:
+        reader = csv.reader(file)
+
+        distance_matrix = []
+        locations = []
+
+        for row in reader:
+            # Extract location name & address
+            name, address = row[:2]
+            # Store node information
+            locations.append((name.strip('"'), address.strip('"')))
+            # Convert to float, allow None
+            distances = [float(cell) if cell.strip() else None for cell in row[2:]]
+
+            distance_matrix.append(distances)
+
+        # Add nodes
+        for name, address in locations:
+            graph.add_node(name, address)
+
+        # Extract lower triangle matrix properly
+        for i in range(len(distance_matrix)):
+            # Lower triangle extraction
+            for j in range(i):
+                if distance_matrix[i][j] is not None:
+                    graph.add_edge(i, j, distance_matrix[i][j])
+
+    return graph
 
 
 if __name__ == "__main__":
     main()
-
