@@ -46,3 +46,42 @@ class Graph:
             name, address = self.node_addresses[i]
             print(f"{i}: {name} ({address}) -> {edges}")
 
+    def get_route_distance(self, start_node, end_node):
+        # Validate node indices
+        if start_node is None or end_node is None:
+            return float('inf')
+
+        if start_node == end_node:
+            return 0.0
+
+        # Search for direct edge
+        for neighbor, distance in self.graph[start_node]:
+            if neighbor == end_node:
+                return distance
+
+        # Fallback: Find minimum distance through graph traversal
+        visited = set()
+        distances = {start_node: 0}
+        unvisited = [(0, start_node)]
+
+        while unvisited:
+            current_distance, current_node = min(unvisited)
+            unvisited.remove((current_distance, current_node))
+
+            if current_node == end_node:
+                return current_distance
+
+            if current_node in visited:
+                continue
+
+            visited.add(current_node)
+
+            for neighbor, edge_distance in self.graph[current_node]:
+                if neighbor not in visited:
+                    new_distance = current_distance + edge_distance
+
+                    if neighbor not in distances or new_distance < distances[neighbor]:
+                        distances[neighbor] = new_distance
+                        unvisited.append((new_distance, neighbor))
+
+        return float('inf')  # No route found

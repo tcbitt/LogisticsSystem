@@ -1,5 +1,6 @@
 import csv
 import re
+from _ast import If
 from datetime import timedelta
 from datetime import datetime
 from modules import Package
@@ -17,7 +18,7 @@ def main():
 
     truck1.departure_time = datetime.strptime("8:00 AM", "%I:%M %p")
     truck2.departure_time = datetime.strptime("9:05 AM", "%I:%M %p")
-    truck3.departure_time = datetime.strptime("10:20 AM", "%I:%M %p")
+    truck3.departure_time = datetime.strptime("10:45 AM", "%I:%M %p")
 
     distance_file_path = "./resources/distances.csv"
     package_file_path = "./resources/packages.csv"
@@ -61,25 +62,17 @@ def main():
         truck1.add_package(package_table.search(package))
         package_table.remove(package)
 
-    for package in delayed_packages:
-        truck3.add_package(package_table.search(package))
-        package_table.remove(package)
-
-    # Get the packages that are delayed until 9:05 AM
+        # Get the packages that are delayed until 9:05 AM
     for package in package_table.table:
         if package and package.value.notes.startswith("Delayed on flight"):
             delayed_packages.append(package.value.ID)
 
-    for ea_truck in trucks:
-        ea_truck.delivery_route = nearest_neighbor(g, ea_truck, package_table ,visited_hubs)
+    for package in delayed_packages:
+        truck3.add_package(package_table.search(package))
+        package_table.remove(package)
 
-    # Load remaining packages onto the last truck
-    for package in package_table.table:
-        for ea_truck in trucks:
-            if len(ea_truck.packages) < 16:
-                if package:
-                    truck3.add_package(package.value)
-                    package_table.remove(package)
+    for ea_truck in trucks:
+        ea_truck.delivery_route = nearest_neighbor(g, ea_truck, package_table , visited_hubs)
 
 
     for ea_truck in trucks:
@@ -127,67 +120,9 @@ def main():
                         if g.get_node_index(package.address) == next_hub_idx:
                             package.status = "Delivered"
                             package.delivery_time = current_time.strftime("%I:%M %p")
-                            print(f"Truck {ea_truck.truck_id} delivered package {package.ID} at {current_time.strftime('%I:%M %p')}")
-                        else:
-                            continue
                     break
                 else:
                     continue
-
-    for ea_truck in trucks:
-        undelivered = []
-        for package in ea_truck.packages:
-            if not hasattr(package, 'delivery_time') or not package.delivery_time:
-                undelivered.append(package)
-                print(f"Package {package.ID} was not delivered: Address: {package.address}")
-
-        if undelivered:
-            print(f"\nTruck {ea_truck.truck_id} has {len(undelivered)} undelivered packages:")
-            for pkg in undelivered:
-                # Try to add these to a special clean-up route
-                node_idx = g.get_node_index(pkg.address)
-                print(f"Package {pkg.ID}: Address: {pkg.address}, Node Index: {node_idx}")
-
-    # FOR DEBUGGING-----------------------------------------------------------------
-    unmatched_packages = []
-    unmatched_routes = []
-    for truck in trucks:
-        # Check packages against routes
-        for package in truck.packages[:]:  # Create a copy to safely modify
-            package_match = any(
-                g.get_node_index(package.address) == route_stop
-                for route_stop in truck.delivery_route
-            )
-            if not package_match:
-                unmatched_packages.append(package)
-                truck.packages.remove(package)
-        # Check routes against packages
-        for route_stop in truck.delivery_route:
-            route_has_package = any(
-                g.get_node_index(package.address) == route_stop
-                for package in truck.packages
-            )
-
-            if not route_has_package:
-                unmatched_routes.append(route_stop)
-    #--------------------------------------------------------------------------------
-    for truck in trucks:
-        # Check route against expected hub routes
-        expected_hub_routes = set(
-            g.get_node_index(package.address)
-            for package in truck.packages
-        )
-
-        # Compare expected hub routes with actual truck routes
-        routes_without_packages = [
-            route for route in truck.delivery_route
-            if route not in expected_hub_routes
-        ]
-
-        # If there are unexpected routes, log or handle them
-        if routes_without_packages:
-            print(f"Truck {truck.truck_id} has routes without packages: {routes_without_packages}")
-            # Optionally: remove these routes or take corrective action
 
     while True:
         choice = menu()
@@ -214,7 +149,7 @@ def menu():
     print("3. Exit")
     return input("Enter your choice (1-3): ")
 
-def get_package_data(trucks, time, delayed_packages):
+def get_package_data(trucks, time):
     for truck in trucks:
         print(f"Truck 1 packages at {time}")
         for package in truck.packages:
@@ -245,14 +180,13 @@ def get_packages(packages_hash_table, package_file):
             # Insert package into hash table
             packages_hash_table.insert(pkg_id, package)
 
-def nearest_neighbor(graph, truck, packages, visited):
+'''def nearest_neighbor(graph, truck, packages, visited, current_hub_index = 0):
     # Start at HUB
-    current_hub_index = 0
     visited.add(current_hub_index)
     truck.delivery_route.append(current_hub_index)
-
-    while len(visited) < len(graph.graph) and len(truck.packages) < 16:
+    while len(visited) < len(graph.graph):
         # Find the closest unvisited neighbor from current hub
+        truck.mileage += graph.graph[current_hub_index][0][1]
         smallest_edge = float('inf')
         next_hub = None
 
@@ -267,23 +201,62 @@ def nearest_neighbor(graph, truck, packages, visited):
 
         # Move to the next hub
         current_hub_index = next_hub
-        truck.mileage += graph.graph[current_hub_index][0][1]
         visited.add(current_hub_index)
+
+    for hub in truck.delivery_route:
+        if hub == 0:
+            continue
+        for package in packages.table:
+            if package and hub == graph.get_node_index(package.value.address):
+                if len(truck.packages) == 16:
+                    break
+                else:
+                    truck.add_package(package.value)
+                    packages.remove(package.key)
+
+    return truck.delivery_route'''
+
+def nearest_neighbor(graph, truck, packages, visited, current_hub_index=0):
+    # Make a copy of the visited set to avoid affecting other trucks
+    local_visited = visited.copy()
+
+    # Start at HUB
+    local_visited.add(current_hub_index)
+    truck.delivery_route.append(current_hub_index)
+
+    while len(local_visited) < len(graph.graph) and len(truck.packages) < 16:
+        smallest_edge = float('inf')
+        next_hub = None
+
+        for neighbor, distance in graph.graph[current_hub_index]:
+            if neighbor not in local_visited and distance < smallest_edge:
+                smallest_edge = distance
+                next_hub = neighbor
+
+        # If no unvisited neighbor found
+        if next_hub is None:
+            break
+
+        # Move to the next hub
+        current_hub_index = next_hub
+        local_visited.add(current_hub_index)
+
+        # Add the mileage and add the hub to the route
+        truck.mileage += smallest_edge
         truck.delivery_route.append(current_hub_index)
 
-        # Check if any packages need to be delivered to this hub
-        hub_address = graph.node_addresses[current_hub_index][1].split('\n')[0].strip()
+        # Try to add packages for this location right away
+        for package in packages.table:
+            if package and current_hub_index == graph.get_node_index(package.value.address):
+                if len(truck.packages) < 16:  # Check capacity
+                    truck.add_package(package.value)
+                    packages.remove(package.key)
 
-        for bucket in packages.table:
-            current = bucket
-            if current:
-                # Compare package address with current hub address
-                if current.value.address == hub_address and len(truck.packages) < 16:
-                    if current:
-                        truck.add_package(current.value)
-                        packages.remove(current.key)
-                        print(f"Added package #{current.value.ID} to truck {truck.truck_id}")
+    # Update the shared visited set with locations this truck has visited
+    visited.update(local_visited)
+
     return truck.delivery_route
+
 
 def load_graph_from_csv(graph, csv_filename):
     with open(csv_filename, newline='') as file:
@@ -353,15 +326,10 @@ def check_package_status(trucks, check_time):
                 if check_time >= truck.departure_time:
                     status = "En route"
 
+
             print(f"{package.ID:<5} {package.address:<40} {package.deadline:<12} {status:<12} {delivery_time_str:<12}")
 
         print("-" * 90)
-
-
-
-
-
-
 
 if __name__ == "__main__":
     main()
