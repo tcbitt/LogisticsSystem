@@ -96,6 +96,7 @@ def optimize_route(truck, graph, visited, current_hub_idx=0):
         if next_hub is None:
             break
 
+        truck.mileage += shortest_edge
         current_hub_idx = next_hub
         visited.add(current_hub_idx)
         optimized_route.append(current_hub_idx)
@@ -140,7 +141,36 @@ def get_packages(packages_hash_table, package_file):
             # Insert package into hash table
             packages_hash_table.insert(pkg_id, package)
 
-def nearest_neighbor(graph, truck, packages, visited, package_id_list, current_hub_index = 0):
+def nearest_neighbor(graph, truck, packages, visited, package_id_list):
+    current_hub_idx = truck.delivery_route[-1]
+    while len(visited) < len(graph.graph) and len(truck.packages) < 16:
+        # Find the closest unvisited neighbor from current hub
+        smallest_edge = float('inf')
+        next_hub = None
+
+        for neighbor, distance in graph.graph[current_hub_idx]:
+            if neighbor not in visited and distance < smallest_edge:
+                smallest_edge = distance
+                next_hub = neighbor
+
+        # If no unvisited neighbor found
+        if next_hub is None:
+            break
+
+        # Move to the next hub
+        current_hub_idx = next_hub
+        visited.add(current_hub_idx)
+        truck.delivery_route.append(current_hub_idx)
+        truck.mileage += smallest_edge
+
+        # Load the packages for this hub
+        for package in packages.table:
+            if package and current_hub_idx == graph.get_node_index(package.value.address):
+                if len(truck.packages) < 16:
+                    truck.add_package(package.value)
+                    packages.remove(package.key)
+
+    return truck.delivery_route
 
     return
 '''def nearest_neighbor(graph, truck, packages, visited, package_id_list, current_hub_index = 0):
@@ -175,9 +205,6 @@ def nearest_neighbor(graph, truck, packages, visited, package_id_list, current_h
                     packages.remove(package.key)
 
     return truck.delivery_route'''
-
-
-
 
 
 def load_graph_from_csv(graph, csv_filename):
@@ -291,7 +318,6 @@ def get_constrained_packages(packages):
 
     package_buckets = [grouped_packages, late_packages, truck2_packages, all_other_packages]
     return package_buckets
-
 
 def prioritize_packages(trucks, graph):
     for ea_truck in trucks:
