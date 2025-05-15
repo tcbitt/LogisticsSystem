@@ -1,16 +1,13 @@
+# Travis Bittner Student ID #012284215
+
 import csv
 import re
-from _ast import If
 from datetime import timedelta
 from datetime import datetime
-
-from sympy.codegen.ast import continue_
-
 from modules import Package
 from modules import HashTable
 from modules import Truck
 from modules import Graph
-
 
 def main():
     truck1 = Truck(1)
@@ -18,10 +15,6 @@ def main():
     truck3 = Truck(3)
 
     trucks = [truck1, truck2, truck3]
-
-    truck1.departure_time = datetime.strptime("8:00 AM", "%I:%M %p")
-    truck2.departure_time = datetime.strptime("9:05 AM", "%I:%M %p")
-    truck3.departure_time = datetime.strptime("10:20 AM", "%I:%M %p")
 
     distance_file_path = "./resources/distances.csv"
     package_file_path = "./resources/packages.csv"
@@ -38,7 +31,6 @@ def main():
     get_packages(package_table, package_file_path)
     get_packages(reference_table, package_file_path)
 
-
     visited_hubs = set()
 
     # [0] = grouped packages
@@ -53,11 +45,13 @@ def main():
         optimized_route = optimize_route(ea_truck, g, visited_hubs)
         ea_truck.delivery_route = optimized_route
 
-
     for ea_truck in trucks:
         ea_truck.delivery_route = nearest_neighbor(g, ea_truck, package_table , visited_hubs, package_id_list)
 
+    # Optimize truck 3 to deliver the packages on time
+    truck3.delivery_route = optimize_route_priority(truck3, g)
 
+    deliver_packages(trucks, g)
 
     while True:
         choice = menu()
@@ -70,18 +64,80 @@ def main():
             except ValueError:
                 print("Invalid time format. Please use HH:MM AM/PM format (e.g., 10:30 AM).")
         elif choice == "2":
-            print(f"Total mileage: {sum(obj.mileage for obj in trucks)} miles")
+            print(f"Total mileage: {sum(obj.mileage for obj in trucks)}: miles")
         elif choice == "3":
             exit()
         else:
             continue
+
+
+def optimize_route_priority(truck, graph, current_hub_idx=0):
+    visited = set()
+    optimized_route = []
+    visited.add(current_hub_idx)
+    optimized_route.append(current_hub_idx)
+
+    # Separate packages into priority (10:30 AM deadline) and non-priority
+    priority_packages = [pkg for pkg in truck.packages if pkg.deadline == "10:30 AM"]
+    non_priority_packages = [pkg for pkg in truck.packages if pkg.deadline != "10:30 AM"]
+
+    # Process priority packages first using nearest neighbor
+    remaining_packages = priority_packages + non_priority_packages
+
+    while remaining_packages:
+        shortest_edge = float('inf')
+        next_hub = None
+        next_pkg_idx = None
+
+        # If we still have priority packages, ONLY consider them
+        if priority_packages:
+            package_list = priority_packages
+        else:
+            package_list = non_priority_packages
+
+        for i, package in enumerate(package_list):
+            package_hub_idx = graph.get_node_index(package.address)
+            if package_hub_idx is not None and package_hub_idx not in visited:
+                distance = graph.get_route_distance(current_hub_idx, package_hub_idx)
+                if distance < shortest_edge:
+                    shortest_edge = distance
+                    next_hub = package_hub_idx
+                    next_pkg_idx = i
+
+        if next_hub is None:
+            # No more unvisited locations for this package type
+            # If we were processing priority packages, switch to non-priority
+            if priority_packages:
+                priority_packages = []
+                continue
+            else:
+                break
+
+        truck.mileage += shortest_edge
+        current_hub_idx = next_hub
+        visited.add(current_hub_idx)
+        optimized_route.append(current_hub_idx)
+
+        # Remove the package we just handled from the appropriate list
+        if priority_packages and next_pkg_idx is not None:
+            priority_packages.pop(next_pkg_idx)
+        elif next_pkg_idx is not None:
+            non_priority_packages.pop(next_pkg_idx)
+
+    # Return to hub if needed (add hub index 0 to end of route)
+    if current_hub_idx != 0:
+        return_distance = graph.get_route_distance(current_hub_idx, 0)
+        truck.mileage += return_distance
+        optimized_route.append(0)
+
+    return optimized_route
 
 def optimize_route(truck, graph, visited, current_hub_idx=0):
     optimized_route = []
     visited.add(current_hub_idx)
     optimized_route.append(current_hub_idx)
 
-    while len(visited) < len(truck.packages) + 1:
+    while len(visited) < len(graph.graph):
         shortest_edge = float('inf')
         next_hub = None
 
@@ -103,7 +159,6 @@ def optimize_route(truck, graph, visited, current_hub_idx=0):
 
     return optimized_route
 
-
 def menu():
     print("\n===== WGUPS Package Delivery System =====")
     print("1. View Package Status")
@@ -118,7 +173,6 @@ def get_package_data(trucks, time):
             if package.ID == 1:
                 print(f"Package {package.ID} at {package.address} at {time}")
 
-# Get the packages from the package file.
 def get_packages(packages_hash_table, package_file):
     with open(package_file, 'r') as file:
         # Skip the header row
@@ -141,71 +195,48 @@ def get_packages(packages_hash_table, package_file):
             # Insert package into hash table
             packages_hash_table.insert(pkg_id, package)
 
+def create_hub_list(graph, package_id_list, packages):
+    needed_hubs = set()
+    for package_id in package_id_list:
+        needed_hubs.add(graph.get_node_index(packages.search(package_id).address))
+    return needed_hubs
+
 def nearest_neighbor(graph, truck, packages, visited, package_id_list):
+
+    needed_hubs = create_hub_list(graph, package_id_list, packages)
     current_hub_idx = truck.delivery_route[-1]
-    while len(visited) < len(graph.graph) and len(truck.packages) < 16:
+
+
+    while needed_hubs and len(truck.packages) < 16:
         # Find the closest unvisited neighbor from current hub
         smallest_edge = float('inf')
         next_hub = None
 
-        for neighbor, distance in graph.graph[current_hub_idx]:
-            if neighbor not in visited and distance < smallest_edge:
+        for hub_idx in needed_hubs:
+            distance = graph.get_route_distance(current_hub_idx, hub_idx)
+            if distance < smallest_edge:
                 smallest_edge = distance
-                next_hub = neighbor
-
+                next_hub = hub_idx
         # If no unvisited neighbor found
         if next_hub is None:
             break
 
         # Move to the next hub
         current_hub_idx = next_hub
-        visited.add(current_hub_idx)
         truck.delivery_route.append(current_hub_idx)
         truck.mileage += smallest_edge
+        needed_hubs.remove(current_hub_idx)
 
         # Load the packages for this hub
-        for package in packages.table:
-            if package and current_hub_idx == graph.get_node_index(package.value.address):
+        for package in package_id_list:
+            package_obj = packages.search(package)
+            if package_obj and current_hub_idx == graph.get_node_index(package_obj.address):
                 if len(truck.packages) < 16:
-                    truck.add_package(package.value)
-                    packages.remove(package.key)
+                    truck.add_package(package_obj)
+                    packages.remove(package)
+                    package_id_list.remove(package)
 
     return truck.delivery_route
-
-    return
-'''def nearest_neighbor(graph, truck, packages, visited, package_id_list, current_hub_index = 0):
-    # Start at HUB
-    visited.add(current_hub_index)
-    truck.delivery_route.append(current_hub_index)
-    while len(visited) < len(graph.graph) and len(truck.packages) < 16:
-        # Find the closest unvisited neighbor from current hub
-        smallest_edge = float('inf')
-        next_hub = None
-
-        for neighbor, distance in graph.graph[current_hub_index]:
-            if neighbor not in visited and distance < smallest_edge:
-                smallest_edge = distance
-                next_hub = neighbor
-
-        # If no unvisited neighbor found
-        if next_hub is None:
-            break
-
-        # Move to the next hub
-        current_hub_index = next_hub
-        visited.add(current_hub_index)
-        truck.delivery_route.append(current_hub_index)
-        truck.mileage += smallest_edge
-
-        # Load the packages for this hub
-        for package in packages.table:
-            if package and current_hub_index == graph.get_node_index(package.value.address):
-                if len(truck.packages) < 16:
-                    truck.add_package(package.value)
-                    packages.remove(package.key)
-
-    return truck.delivery_route'''
-
 
 def load_graph_from_csv(graph, csv_filename):
     with open(csv_filename, newline='') as file:
@@ -248,6 +279,8 @@ def check_package_status(trucks, check_time):
         print("-" * 90)
 
         for package in truck.packages:
+            if check_time >= datetime.strptime("10:20 AM", "%I:%M %p") and package.ID == 9:
+                package.address = "410 S State St"
             # Determine package status based on time
             status = "At hub"
             delivery_time_str = "N/A"
@@ -347,10 +380,21 @@ def prioritize_packages(trucks, graph):
 
         ea_truck.delivery_route.insert(0, path_list)
 
+def set_next_truck_departure(trucks):
+    return_times = []
+    for truck in trucks:
+        if truck.return_time:
+            return_times.append(datetime.strptime(truck.return_time, "%I:%M %p"))
+
+    return min(return_times)
+
 def deliver_packages(trucks, graph):
     for ea_truck in trucks:
+        if ea_truck.truck_id == 3:
+            current_time = set_next_truck_departure(trucks)
+        else:
+            current_time = ea_truck.departure_time
         print("\n\n")
-        current_time = ea_truck.departure_time
         # Set the package status to en route
         for package in ea_truck.packages:
             package.status = "En route"
@@ -371,6 +415,8 @@ def deliver_packages(trucks, graph):
                     break
                 else:
                     continue
+
+        ea_truck.return_time = current_time.strftime("%I:%M %p")
 
 def load_packages(truck, package_buckets, packages):
     # Add the grouped packages to either truck.
